@@ -75,9 +75,11 @@ export function CodeEditor({ blockId, text, language, fileName, readonly, onChan
         monaco: typeof MonacoModule
     ): () => void {
         if (onMount) {
-            unmountRef.current = onMount(editor, monaco);
+            const cleanup = onMount(editor, monaco);
+            unmountRef.current = cleanup;
+            return cleanup;
         }
-        return null;
+        return undefined;
     }
 
     const editorOpts = useMemo(() => {
@@ -91,7 +93,7 @@ export function CodeEditor({ blockId, text, language, fileName, readonly, onChan
     }, [minimapEnabled, stickyScrollEnabled, wordWrap, fontSize, readonly]);
 
     return (
-        <div className="flex flex-col w-full h-full overflow-hidden items-center justify-center">
+        <div className="flex flex-col w-full h-full items-center justify-center">
             <div className="flex flex-col h-full w-full" ref={divRef}>
                 <MonacoCodeEditor
                     readonly={readonly}

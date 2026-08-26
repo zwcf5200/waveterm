@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/wavetermdev/waveterm/pkg/blockcontroller"
 	"github.com/wavetermdev/waveterm/pkg/filestore"
 	"github.com/wavetermdev/waveterm/pkg/panichandler"
 	"github.com/wavetermdev/waveterm/pkg/telemetry"
@@ -33,6 +32,9 @@ func CreateSubBlock(ctx context.Context, blockId string, blockDef *waveobj.Block
 	if err != nil {
 		return nil, fmt.Errorf("error creating sub block: %w", err)
 	}
+	blockView := blockDef.Meta.GetString(waveobj.MetaKey_View, "")
+	blockController := blockDef.Meta.GetString(waveobj.MetaKey_Controller, "")
+	go recordBlockCreationTelemetry(blockView, blockController, true)
 	return blockData, nil
 }
 
@@ -101,12 +103,12 @@ func CreateBlockWithTelemetry(ctx context.Context, tabId string, blockDef *waveo
 	if recordTelemetry {
 		blockView := blockDef.Meta.GetString(waveobj.MetaKey_View, "")
 		blockController := blockDef.Meta.GetString(waveobj.MetaKey_Controller, "")
-		go recordBlockCreationTelemetry(blockView, blockController)
+		go recordBlockCreationTelemetry(blockView, blockController, false)
 	}
 	return blockData, nil
 }
 
-func recordBlockCreationTelemetry(blockView string, blockController string) {
+func recordBlockCreationTelemetry(blockView string, blockController string, subBlock bool) {
 	defer func() {
 		panichandler.PanicHandler("CreateBlock:telemetry", recover())
 	}()
@@ -123,6 +125,7 @@ func recordBlockCreationTelemetry(blockView string, blockController string) {
 		Props: telemetrydata.TEventProps{
 			BlockView:       blockView,
 			BlockController: blockController,
+			BlockSubBlock:   subBlock,
 		},
 	})
 }
@@ -187,7 +190,6 @@ func DeleteBlock(ctx context.Context, blockId string, recursive bool) error {
 		}
 		SendActiveTabUpdate(ctx, parentWorkspaceId, newActiveTabId)
 	}
-	go blockcontroller.StopBlockController(blockId)
 	sendBlockCloseEvent(blockId)
 	return nil
 }

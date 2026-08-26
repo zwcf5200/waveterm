@@ -20,7 +20,6 @@ import (
 	"github.com/wavetermdev/waveterm/pkg/eventbus"
 	"github.com/wavetermdev/waveterm/pkg/panichandler"
 	"github.com/wavetermdev/waveterm/pkg/web/webcmd"
-	"github.com/wavetermdev/waveterm/pkg/wshrpc"
 	"github.com/wavetermdev/waveterm/pkg/wshutil"
 )
 
@@ -31,6 +30,7 @@ const wsInitialPingTime = 1 * time.Second
 const wsMaxMessageSize = 10 * 1024 * 1024
 
 const DefaultCommandTimeout = 2 * time.Second
+const WebSocketChannelSize = 128
 
 type StableConnInfo struct {
 	ConnId string
@@ -110,40 +110,6 @@ func processWSCommand(jmsg map[string]any, outputCh chan any, rpcInputCh chan ba
 	}
 	cmdType = wsCommand.GetWSCommand()
 	switch cmd := wsCommand.(type) {
-	case *webcmd.SetBlockTermSizeWSCommand:
-		data := wshrpc.CommandBlockInputData{
-			BlockId:  cmd.BlockId,
-			TermSize: &cmd.TermSize,
-		}
-		rpcMsg := wshutil.RpcMessage{
-			Command: wshrpc.Command_ControllerInput,
-			Data:    data,
-		}
-		msgBytes, err := json.Marshal(rpcMsg)
-		if err != nil {
-			// this really should never fail since we just unmarshalled this value
-			log.Printf("[websocket] error marshalling rpc message: %v\n", err)
-			return
-		}
-		rpcInputCh <- baseds.RpcInputChType{MsgBytes: msgBytes}
-
-	case *webcmd.BlockInputWSCommand:
-		data := wshrpc.CommandBlockInputData{
-			BlockId:     cmd.BlockId,
-			InputData64: cmd.InputData64,
-		}
-		rpcMsg := wshutil.RpcMessage{
-			Command: wshrpc.Command_ControllerInput,
-			Data:    data,
-		}
-		msgBytes, err := json.Marshal(rpcMsg)
-		if err != nil {
-			// this really should never fail since we just unmarshalled this value
-			log.Printf("[websocket] error marshalling rpc message: %v\n", err)
-			return
-		}
-		rpcInputCh <- baseds.RpcInputChType{MsgBytes: msgBytes}
-
 	case *webcmd.WSRpcCommand:
 		rpcMsg := cmd.Message
 		if rpcMsg == nil {
@@ -159,14 +125,6 @@ func processWSCommand(jmsg map[string]any, outputCh chan any, rpcInputCh chan ba
 		}
 		rpcInputCh <- baseds.RpcInputChType{MsgBytes: msgBytes}
 	}
-}
-
-func processMessage(jmsg map[string]any, outputCh chan any, rpcInputCh chan baseds.RpcInputChType) {
-	wsCommand := getStringFromMap(jmsg, "wscommand")
-	if wsCommand == "" {
-		return
-	}
-	processWSCommand(jmsg, outputCh, rpcInputCh)
 }
 
 func ReadLoop(conn *websocket.Conn, outputCh chan any, closeCh chan any, rpcInputCh chan baseds.RpcInputChType, routeId string) {
@@ -198,7 +156,11 @@ func ReadLoop(conn *websocket.Conn, outputCh chan any, closeCh chan any, rpcInpu
 			outputCh <- pongMessage
 			continue
 		}
-		go processMessage(jmsg, outputCh, rpcInputCh)
+		wsCommand := getStringFromMap(jmsg, "wscommand")
+		if wsCommand == "" {
+			continue
+		}
+		processWSCommand(jmsg, outputCh, rpcInputCh)
 	}
 }
 
@@ -306,12 +268,12 @@ func HandleWsInternal(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer conn.Close()
 	wsConnId := uuid.New().String()
-	outputCh := make(chan any, 100)
+	outputCh := make(chan any, WebSocketChannelSize)
 	closeCh := make(chan any)
 	log.Printf("[websocket] new connection: connid:%s stableid:%s\n", wsConnId, stableId)
 	eventbus.RegisterWSChannel(wsConnId, stableId, outputCh)
 	defer eventbus.UnregisterWSChannel(wsConnId)
-	wproxy := wshutil.MakeRpcProxy(fmt.Sprintf("ws:%s", stableId))
+	wproxy := wshutil.MakeRpcProxyWithSize(fmt.Sprintf("ws:%s", stableId), WebSocketChannelSize, WebSocketChannelSize)
 	defer close(wproxy.ToRemoteCh)
 	registerConn(wsConnId, stableId, wproxy)
 	defer unregisterConn(wsConnId, stableId)

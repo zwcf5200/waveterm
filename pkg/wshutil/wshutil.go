@@ -171,7 +171,7 @@ func SetupConnRpcClient(conn net.Conn, serverImpl ServerImpl, debugStr string) (
 		}()
 		// when input is closed, close the connection
 		defer conn.Close()
-		AdaptStreamToMsgCh(conn, inputCh)
+		AdaptStreamToMsgCh(conn, inputCh, nil)
 	}()
 	rtn := MakeWshRpcWithChannels(inputCh, outputCh, wshrpc.RpcContext{}, serverImpl, debugStr)
 	return rtn, writeErrCh, nil
@@ -187,6 +187,13 @@ func tryTcpSocket(sockName string) (net.Conn, error) {
 
 func SetupDomainSocketRpcClient(sockName string, serverImpl ServerImpl, debugName string) (*WshRpc, error) {
 	sockName = wavebase.ExpandHomeDirSafe(sockName)
+	resolvedPath, err := filepath.EvalSymlinks(sockName)
+	if err == nil {
+		sockName = resolvedPath
+	}
+	if !filepath.IsAbs(sockName) {
+		return nil, fmt.Errorf("socket path must be absolute: %s", sockName)
+	}
 	conn, tcpErr := tryTcpSocket(sockName)
 	var unixErr error
 	if tcpErr != nil {
@@ -211,30 +218,32 @@ func SetupDomainSocketRpcClient(sockName string, serverImpl ServerImpl, debugNam
 
 func MakeClientJWTToken(rpcCtx wshrpc.RpcContext) (string, error) {
 	if wavebase.IsDevMode() {
-		if rpcCtx.IsRouter && rpcCtx.RouteId != "" {
+		if rpcCtx.IsRouter && (rpcCtx.RouteId != "" || rpcCtx.ProcRoute) {
 			panic("Invalid RpcCtx, router w/ routeid")
 		}
-		if !rpcCtx.IsRouter && rpcCtx.RouteId == "" {
+		if !rpcCtx.IsRouter && (rpcCtx.RouteId == "" && !rpcCtx.ProcRoute) {
 			panic("Invalid RpcCtx, no routeid")
 		}
 	}
 	claims := &wavejwt.WaveJwtClaims{
-		Sock:    rpcCtx.SockName,
-		RouteId: rpcCtx.RouteId,
-		BlockId: rpcCtx.BlockId,
-		Conn:    rpcCtx.Conn,
-		Router:  rpcCtx.IsRouter,
+		Sock:      rpcCtx.SockName,
+		RouteId:   rpcCtx.RouteId,
+		ProcRoute: rpcCtx.ProcRoute,
+		BlockId:   rpcCtx.BlockId,
+		Conn:      rpcCtx.Conn,
+		Router:    rpcCtx.IsRouter,
 	}
 	return wavejwt.Sign(claims)
 }
 
 func claimsToRpcCtx(claims *wavejwt.WaveJwtClaims) *wshrpc.RpcContext {
 	return &wshrpc.RpcContext{
-		SockName: claims.Sock,
-		RouteId:  claims.RouteId,
-		BlockId:  claims.BlockId,
-		Conn:     claims.Conn,
-		IsRouter: claims.Router,
+		SockName:  claims.Sock,
+		RouteId:   claims.RouteId,
+		ProcRoute: claims.ProcRoute,
+		BlockId:   claims.BlockId,
+		Conn:      claims.Conn,
+		IsRouter:  claims.Router,
 	}
 }
 
@@ -246,7 +255,7 @@ func ValidateAndExtractRpcContextFromToken(tokenStr string) (*wshrpc.RpcContext,
 	return claimsToRpcCtx(claims), nil
 }
 
-func RunWshRpcOverListener(listener net.Listener) {
+func RunWshRpcOverListener(listener net.Listener, readCallback func()) {
 	defer log.Printf("domain socket listener shutting down\n")
 	for {
 		conn, err := listener.Accept()
@@ -258,7 +267,7 @@ func RunWshRpcOverListener(listener net.Listener) {
 			break
 		}
 		log.Print("got domain socket connection\n")
-		go handleDomainSocketClient(conn)
+		go handleDomainSocketClient(conn, readCallback)
 	}
 }
 
@@ -315,7 +324,7 @@ func HandleStdIOClient(logName string, input chan utilfn.LineOutput, output io.W
 	<-doneCh
 }
 
-func handleDomainSocketClient(conn net.Conn) {
+func handleDomainSocketClient(conn net.Conn, readCallback func()) {
 	var linkIdContainer atomic.Int32
 	proxy := MakeRpcProxy("domain")
 	go func() {
@@ -341,7 +350,7 @@ func handleDomainSocketClient(conn net.Conn) {
 				DefaultRouter.UnregisterLink(baseds.LinkId(linkId))
 			}
 		}()
-		AdaptStreamToMsgCh(conn, proxy.FromRemoteCh)
+		AdaptStreamToMsgCh(conn, proxy.FromRemoteCh, readCallback)
 	}()
 	linkId := DefaultRouter.RegisterUntrustedLink(proxy)
 	linkIdContainer.Store(int32(linkId))
@@ -395,8 +404,8 @@ func GetInfo() wshrpc.RemoteInfo {
 		ClientOs:      runtime.GOOS,
 		ClientVersion: wavebase.WaveVersion,
 		Shell:         getShell(),
+		HomeDir:       wavebase.GetHomeDir(),
 	}
-
 }
 
 func InstallRcFiles() error {
