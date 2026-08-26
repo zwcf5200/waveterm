@@ -909,7 +909,7 @@ export class TermViewModel implements ViewModel {
 
         menu.push({ type: "separator" });
 
-        const settingsItems = await this.getSettingsMenuItems(false);
+        const settingsItems = await this.getSettingsMenuItems();
         menu.push(...settingsItems);
 
         return menu;
@@ -926,7 +926,8 @@ export class TermViewModel implements ViewModel {
         const curSession = (globalStore.get(getBlockMetaKeyAtom(this.blockId, "term:tmux:session")) ?? "") as string;
         let sessions: string[] = [];
         try {
-            sessions = await RpcApi.ListTmuxSessionsCommand(TabRpcClient, connName);
+            // Normalize a null result (RPC connection down) to an empty list so `.includes` below never throws.
+            sessions = (await RpcApi.ListTmuxSessionsCommand(TabRpcClient, connName)) ?? [];
         } catch (e) {
             // Keep the settings menu usable when the connection is down, tmux is unavailable, or listing fails.
             sessions = [];
@@ -970,7 +971,7 @@ export class TermViewModel implements ViewModel {
         );
     }
 
-    async getSettingsMenuItems(includeTmuxSessions = true): Promise<ContextMenuItem[]> {
+    async getSettingsMenuItems(): Promise<ContextMenuItem[]> {
         const fullConfig = globalStore.get(atoms.fullConfigAtom);
         const termThemes = fullConfig?.termthemes ?? {};
         const termThemeKeys = Object.keys(termThemes);
@@ -992,11 +993,9 @@ export class TermViewModel implements ViewModel {
         };
 
         const fullMenu: ContextMenuItem[] = [];
-        if (includeTmuxSessions) {
-            const tmuxSubmenu = await this.getTmuxSessionMenuItems();
-            if (tmuxSubmenu != null) {
-                fullMenu.push(tmuxSubmenu, { type: "separator" });
-            }
+        const tmuxSubmenu = await this.getTmuxSessionMenuItems();
+        if (tmuxSubmenu != null) {
+            fullMenu.push(tmuxSubmenu, { type: "separator" });
         }
         fullMenu.push({
             label: "Split Horizontally",
