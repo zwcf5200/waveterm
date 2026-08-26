@@ -10,7 +10,7 @@ import (
 	"github.com/wavetermdev/waveterm/pkg/waveobj"
 )
 
-// Requirement: auto-associate remote sessions with tmux (req/02-需求-远程会话自动关联tmux.md)
+// Requirement: auto-associate remote sessions with tmux.
 // Acceptance criteria coverage:
 // 1. Remote block with term:tmux:session → tmux attach is injected
 // 2. Local block / block without the meta key → no injection
